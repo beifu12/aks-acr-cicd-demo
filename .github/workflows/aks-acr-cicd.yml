@@ -27,7 +27,7 @@ jobs:
 
       # 步骤2：配置Azure中国认证（核心修改点）
       - name: Azure Login (China)
-        uses: azure/login@v1
+        uses: azure/login@v1.6.0
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }} # 用合并后的JSON Secret
           environment: "AzureChinaCloud" # 保留Azure中国环境配置
