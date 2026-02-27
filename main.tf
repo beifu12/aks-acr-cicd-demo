@@ -48,8 +48,8 @@ resource "azurerm_kubernetes_cluster" "aks_demo" {
   location            = azurerm_resource_group.aks_demo.location
   dns_prefix          = "aksdemocluster${random_string.suffix.result}"
   
-  # 目标版本：1.30.0 (请确认 Azure China 2024/10 后是否已支持，若不支持请改为 1.29.5)
-  kubernetes_version  = "1.30.0"
+  # 目标版本：1.33.2 (请确认 Azure China 2024/10 后是否已支持，若不支持请改为 1.29.5)
+  kubernetes_version  = "1.33.2"
 
   # --- 核心修复：满足 Azure Policy 的自动升级要求 ---
   # 在 4.x 中，这是顶层属性，对应文档中的 automatic_upgrade_channel
