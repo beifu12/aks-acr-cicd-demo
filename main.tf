@@ -58,15 +58,6 @@ resource "azurerm_kubernetes_cluster" "aks_demo" {
     type = "SystemAssigned"
   }
 
-  # 自动关联ACR权限
-  acr_attach {
-    id = azurerm_container_registry.aks_demo.id
-  }
-
-  # 让AKS有权限访问ACR
-  depends_on = [azurerm_container_registry.aks_demo]
-}
-
 # 生成随机后缀（避免ACR名称重复）
 resource "random_string" "suffix" {
   length  = 6
@@ -91,4 +82,11 @@ output "acr_admin_password" {
 output "aks_kubeconfig" {
   value     = azurerm_kubernetes_cluster.aks_demo.kube_config_raw
   sensitive = true
+}
+
+# 为 AKS 服务主体授予 ACR 的拉取权限
+resource "azurerm_role_assignment" "aks_acr_pull" {
+  scope                = azurerm_container_registry.aks_demo.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_kubernetes_cluster.aks_demo.identity[0].principal_id
 }
