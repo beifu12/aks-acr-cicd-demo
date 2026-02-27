@@ -29,11 +29,8 @@ jobs:
       - name: Azure Login (China)
         uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          environment: "AzureChinaCloud" # 关键：指定Azure中国环境
+          creds: ${{ secrets.AZURE_CREDENTIALS }} # 用合并后的JSON Secret
+          environment: "AzureChinaCloud" # 保留Azure中国环境配置
 
       # 步骤3：安装Terraform
       - name: Setup Terraform
