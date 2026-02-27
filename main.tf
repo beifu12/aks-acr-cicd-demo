@@ -13,9 +13,9 @@ terraform {
   }
 }
 
-# Configure the AzureRM Provider (强制指定 Azure China Cloud)
 provider "azurerm" {
   features {}
+  environment = "china"
 }
 
 # Generate a random suffix to ensure unique resource names
