@@ -1,0 +1,157 @@
+name: AKS + ACR CI/CD (Azure China)
+
+# 触发条件：推送到dev-aks-acr分支，或手动触发
+on:
+  push:
+    branches: [ dev-aks-acr ]
+  workflow_dispatch: # 手动触发按钮
+
+# 工作流权限
+permissions:
+  contents: read
+
+jobs:
+  # 任务1：创建AKS+ACR（Terraform）
+  create-aks-acr:
+    runs-on: ubuntu-latest
+    outputs:
+      acr_login_server: ${{ steps.terraform-outputs.outputs.acr_login_server }}
+      acr_admin_username: ${{ steps.terraform-outputs.outputs.acr_admin_username }}
+      acr_admin_password: ${{ steps.terraform-outputs.outputs.acr_admin_password }}
+      aks_kubeconfig: ${{ steps.terraform-outputs.outputs.aks_kubeconfig }}
+
+    steps:
+      # 步骤1：拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 步骤2：配置Azure中国认证（核心修改点）
+      - name: Azure Login (China)
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          environment: "AzureChinaCloud" # 关键：指定Azure中国环境
+
+      # 步骤3：安装Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      # 步骤4：Terraform初始化（自动适配Azure中国）
+      - name: Terraform Init
+        run: terraform init
+
+      # 步骤5：Terraform执行计划
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      # 步骤6：Terraform应用（创建资源）
+      - name: Terraform Apply
+        run: terraform apply tfplan
+
+      # 步骤7：输出ACR/AKS信息（传递给下一个任务）
+      - name: Get Terraform Outputs
+        id: terraform-outputs
+        run: |
+          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
+          echo "acr_admin_username=$(terraform output -raw acr_admin_username)" >> $GITHUB_OUTPUT
+          echo "acr_admin_password=$(terraform output -raw acr_admin_password)" >> $GITHUB_OUTPUT
+          echo "aks_kubeconfig=$(terraform output -raw aks_kubeconfig | base64 -w 0)" >> $GITHUB_OUTPUT
+
+  # 任务2：构建Docker镜像并推送到ACR（Azure中国）
+  build-push-image:
+    needs: create-aks-acr # 依赖上一个任务完成
+    runs-on: ubuntu-latest
+
+    steps:
+      # 步骤1：拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 步骤2：创建测试用Dockerfile（示例：Nginx服务）
+      - name: Create Dockerfile
+        run: |
+          cat > Dockerfile << EOF
+          FROM nginx:alpine
+          RUN echo "<h1>Hello AKS (Azure China)! $(date)</h1>" > /usr/share/nginx/html/index.html
+          EOF
+
+      # 步骤3：登录ACR（Azure中国，后缀是azurecr.cn）
+      - name: Login to ACR (China)
+        run: |
+          echo ${{ needs.create-aks-acr.outputs.acr_admin_password }} | docker login ${{ needs.create-aks-acr.outputs.acr_login_server }} -u ${{ needs.create-aks-acr.outputs.acr_admin_username }} --password-stdin
+
+      # 步骤4：构建并推送镜像
+      - name: Build and Push Image
+        run: |
+          IMAGE_NAME=nginx-demo:${{ github.sha }}
+          docker build -t ${{ needs.create-aks-acr.outputs.acr_login_server }}/$IMAGE_NAME .
+          docker push ${{ needs.create-aks-acr.outputs.acr_login_server }}/$IMAGE_NAME
+          echo "IMAGE_URL=${{ needs.create-aks-acr.outputs.acr_login_server }}/$IMAGE_NAME" >> $GITHUB_ENV
+
+  # 任务3：部署镜像到AKS（Azure中国）
+  deploy-to-aks:
+    needs: [create-aks-acr, build-push-image] # 依赖前两个任务
+    runs-on: ubuntu-latest
+
+    steps:
+      # 步骤1：拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 步骤2：安装kubectl
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+
+      # 步骤3：配置AKS kubeconfig（Azure中国）
+      - name: Set Kubeconfig (China)
+        run: |
+          echo "${{ needs.create-aks-acr.outputs.aks_kubeconfig }}" | base64 -d > kubeconfig.yaml
+          export KUBECONFIG=$(pwd)/kubeconfig.yaml
+
+      # 步骤4：部署Nginx服务到AKS
+      - name: Deploy to AKS (China)
+        run: |
+          kubectl apply -f - << EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nginx-demo
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: nginx-demo
+            template:
+              metadata:
+                labels:
+                  app: nginx-demo
+              spec:
+                containers:
+                - name: nginx-demo
+                  image: ${{ env.IMAGE_URL }}
+                  ports:
+                  - containerPort: 80
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: nginx-demo-service
+          spec:
+            type: LoadBalancer
+            selector:
+              app: nginx-demo
+            ports:
+            - port: 80
+              targetPort: 80
+          EOF
+
+      # 步骤5：查看部署状态
+      - name: Check Deployment
+        run: |
+          kubectl get pods
+          kubectl get services
