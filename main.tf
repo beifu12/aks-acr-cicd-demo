@@ -37,17 +37,30 @@ resource "azurerm_kubernetes_cluster" "aks_demo" {
   resource_group_name = azurerm_resource_group.aks_demo.name
   location            = azurerm_resource_group.aks_demo.location
   dns_prefix          = "aksdemocluster"
-  kubernetes_version  = "1.29.3" # 确认Azure中国支持的版本（可查官网）
-  auto_upgrade_channel = "stable" # 可选：patch (仅安全补丁)、stable (稳定版)、rapid (最新版)
+  kubernetes_version  = "1.30.0" # 建议确认当前支持的最新版本
 
+  # 自动更新配置已经移到 node_pool 内部了
   default_node_pool {
     name       = "default"
     node_count = 1
-    vm_size    = "Standard_D2s_v3" # Azure中国支持的低配机型
+    vm_size    = "Standard_D2s_v3"
+
+    # 核心修复：启用自动升级，满足订阅策略（放在 default_node_pool 内部）
+    auto_upgrade_channel = "stable" 
+    
+    # 如果你还想启用节点资源自动升级（可选）
+    upgrade_settings {
+      auto_upgrade = true
+    }
   }
 
   identity {
     type = "SystemAssigned"
+  }
+
+  # 自动关联ACR权限
+  acr_attach {
+    id = azurerm_container_registry.aks_demo.id
   }
 
   # 让AKS有权限访问ACR
