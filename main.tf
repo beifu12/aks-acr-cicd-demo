@@ -37,7 +37,8 @@ resource "azurerm_kubernetes_cluster" "aks_demo" {
   resource_group_name = azurerm_resource_group.aks_demo.name
   location            = azurerm_resource_group.aks_demo.location
   dns_prefix          = "aksdemocluster"
-  kubernetes_version  = "1.29.0" # 确认Azure中国支持的版本（可查官网）
+  kubernetes_version  = "1.29.3" # 确认Azure中国支持的版本（可查官网）
+  auto_upgrade_channel = "stable" # 可选：patch (仅安全补丁)、stable (稳定版)、rapid (最新版)
 
   default_node_pool {
     name       = "default"
