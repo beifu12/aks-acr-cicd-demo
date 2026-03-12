@@ -92,7 +92,7 @@ resource "azurerm_role_assignment" "aks_acr_pull" {
 
 output "acr_login_server" {
   description = "ACR 的登录地址，例如：xxx.azurecr.cn"
-  value       = azurerm_container_registry.aks_demo.login_server
+  value       = data.azurerm_container_registry.existing_acr.login_server
 }
 
 output "resource_group_name" {
