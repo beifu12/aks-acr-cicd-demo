@@ -1,125 +1,106 @@
 name: AKS + ACR CI/CD (Azure China)
 
-# 触发条件：推送到dev-aks-acr分支，或手动触发
 on:
   push:
     branches: [ dev-aks-acr ]
-  workflow_dispatch: # 手动触发按钮
+  workflow_dispatch:
 
-# 工作流权限
 permissions:
   contents: read
 
 jobs:
-  # 任务1：创建AKS+ACR（Terraform）
+  # 任务 1: Terraform 基础设施（保持不变，精简输出）
   create-aks-acr:
     runs-on: ubuntu-latest
     outputs:
-      acr_login_server: ${{ steps.terraform-outputs.outputs.acr_login_server }}
-      acr_admin_username: ${{ steps.terraform-outputs.outputs.acr_admin_username }}
-      acr_admin_password: ${{ steps.terraform-outputs.outputs.acr_admin_password }}
-      aks_kubeconfig: ${{ steps.terraform-outputs.outputs.aks_kubeconfig }}
-
+      acr_login_server: ${{ steps.outputs.outputs.acr_login_server }}
+      # 减少密码输出，提高安全性
     steps:
-      # 步骤1：拉取代码
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 步骤2：配置Azure中国认证（核心修改点）
-      - name: Azure Login (China)
-        uses: azure/login@v1.6.0
+      - uses: actions/checkout@v4
+      - uses: azure/login@v1
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }} # 用合并后的JSON Secret
-          environment: "AzureChinaCloud" # 保留Azure中国环境配置
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          environment: "AzureChinaCloud"
 
-      # 步骤3：安装Terraform
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.0
 
-      # 步骤4：Terraform初始化（自动适配Azure中国）
-      - name: Terraform Init
-        run: terraform init
-
-      # 步骤5：Terraform执行计划
-      - name: Terraform Plan
-        run: terraform plan -out=tfplan
-
-      # 步骤6：Terraform应用（创建资源）
-      - name: Terraform Apply
-        run: terraform apply tfplan
-
-      # 步骤7：输出ACR/AKS信息（传递给下一个任务）
-      - name: Get Terraform Outputs
-        id: terraform-outputs
+      - name: Terraform Init & Apply
+        run: |
+          terraform init
+          terraform apply -auto-approve -out=tfplan
+        
+      - id: outputs
         run: |
           echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
-          echo "acr_admin_username=$(terraform output -raw acr_admin_username)" >> $GITHUB_OUTPUT
-          echo "acr_admin_password=$(terraform output -raw acr_admin_password)" >> $GITHUB_OUTPUT
-          echo "aks_kubeconfig=$(terraform output -raw aks_kubeconfig | base64 -w 0)" >> $GITHUB_OUTPUT
 
-  # 任务2：构建Docker镜像并推送到ACR（Azure中国）
+  # 任务 2: 构建镜像（优化：使用 Azure 插件登录）
   build-push-image:
-    needs: create-aks-acr # 依赖上一个任务完成
+    needs: create-aks-acr
     runs-on: ubuntu-latest
-
+    outputs:
+      image_tag: ${{ steps.vars.outputs.tag }}
     steps:
-      # 步骤1：拉取代码
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 步骤2：创建测试用Dockerfile（示例：Nginx服务）
-      - name: Create Dockerfile
+      - id: vars
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      # 优化点：使用 azure/docker-login 代替 docker login + admin 密码
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          environment: "AzureChinaCloud"
+
+      - name: Login to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ needs.create-aks-acr.outputs.acr_login_server }}
+          username: ${{ secrets.AZURE_CLIENT_ID }} # 建议从 Secret 获取 SP ID
+          password: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Build and Push
         run: |
-          cat > Dockerfile << EOF
-          FROM nginx:alpine
-          RUN echo "<h1>Hello AKS (Azure China)! $(date)</h1>" > /usr/share/nginx/html/index.html
-          EOF
+          REPO=${{ needs.create-aks-acr.outputs.acr_login_server }}/nginx-demo
+          docker build -t $REPO:${{ steps.vars.outputs.tag }} .
+          docker push $REPO:${{ steps.vars.outputs.tag }}
 
-      # 步骤3：登录ACR（Azure中国，后缀是azurecr.cn）
-      - name: Login to ACR (China)
-        run: |
-          echo ${{ needs.create-aks-acr.outputs.acr_admin_password }} | docker login ${{ needs.create-aks-acr.outputs.acr_login_server }} -u ${{ needs.create-aks-acr.outputs.acr_admin_username }} --password-stdin
-
-      # 步骤4：构建并推送镜像
-      - name: Build and Push Image
-        run: |
-          IMAGE_NAME=nginx-demo:${{ github.sha }}
-          docker build -t ${{ needs.create-aks-acr.outputs.acr_login_server }}/$IMAGE_NAME .
-          docker push ${{ needs.create-aks-acr.outputs.acr_login_server }}/$IMAGE_NAME
-          echo "IMAGE_URL=${{ needs.create-aks-acr.outputs.acr_login_server }}/$IMAGE_NAME" >> $GITHUB_ENV
-
-  # 任务3：部署镜像到AKS（Azure中国）
+  # 任务 3: 部署（优化：使用官方 Action 获取上下文）
   deploy-to-aks:
-    needs: [create-aks-acr, build-push-image] # 依赖前两个任务
+    needs: [create-aks-acr, build-push-image]
     runs-on: ubuntu-latest
-
     steps:
-      # 步骤1：拉取代码
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 步骤2：安装kubectl
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v3
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          environment: "AzureChinaCloud"
 
-      # 步骤3：配置AKS kubeconfig（Azure中国）
-      - name: Set Kubeconfig (China)
+      # 优化点：使用官方 Action 获取 Kubeconfig，无需手动 base64 转换
+      - name: Set AKS Context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: "aks-demo-rg" # 与 Terraform 中的一致
+          cluster-name: "aks-demo-cluster"
+
+      - name: Deploy to AKS
         run: |
-          echo "${{ needs.create-aks-acr.outputs.aks_kubeconfig }}" | base64 -d > kubeconfig.yaml
-          export KUBECONFIG=$(pwd)/kubeconfig.yaml
-
-      # 步骤4：部署Nginx服务到AKS
-      - name: Deploy to AKS (China)
-        run: |
-          kubectl apply -f - << EOF
+          # 动态注入镜像地址
+          IMAGE_URL=${{ needs.create-aks-acr.outputs.acr_login_server }}/nginx-demo:${{ needs.build-push-image.outputs.image_tag }}
+          
+          # 使用 envsubst 或简单的 sed 替换文件中的变量是更专业的做法
+          # 这里演示直接 apply
+          cat <<EOF | kubectl apply -f -
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: nginx-demo
           spec:
-            replicas: 1
+            replicas: 2 # 建议至少2个以测试负载均衡
             selector:
               matchLabels:
                 app: nginx-demo
@@ -130,7 +111,7 @@ jobs:
               spec:
                 containers:
                 - name: nginx-demo
-                  image: ${{ env.IMAGE_URL }}
+                  image: $IMAGE_URL
                   ports:
                   - containerPort: 80
           ---
@@ -147,8 +128,5 @@ jobs:
               targetPort: 80
           EOF
 
-      # 步骤5：查看部署状态
-      - name: Check Deployment
-        run: |
-          kubectl get pods
-          kubectl get services
+      - name: Verify
+        run: kubectl rollout status deployment/nginx-demo
