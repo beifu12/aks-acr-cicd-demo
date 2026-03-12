@@ -28,8 +28,9 @@ jobs:
 
       - name: Terraform Init & Apply
         run: |
-          terraform init
-          terraform apply -auto-approve -out=tfplan
+            terraform init
+            terraform plan -out=tfplan                   # 先生成计划文件
+            terraform apply -auto-approve tfplan         # 再应用这个计划文件
         
       - id: outputs
         run: |
