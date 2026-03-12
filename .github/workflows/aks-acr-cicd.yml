@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  id-token: write # 必须，用于请求 OIDC 令牌
+  contents: read  # 必须，用于拉取代码
 
 jobs:
   # 任务 1: Terraform 基础设施（保持不变，精简输出）
@@ -49,10 +50,12 @@ jobs:
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
 
       # 优化点：使用 azure/docker-login 代替 docker login + admin 密码
-      - name: Azure Login
-        uses: azure/login@v1
+      - name: Azure Login (OIDC方式)
+        uses: azure/login@v2 # 建议升级到 v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}         # Identity 的 Client ID
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}         # Azure 租户 ID
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # 订阅 ID
           environment: "AzureChinaCloud"
 
       - name: Login to ACR
